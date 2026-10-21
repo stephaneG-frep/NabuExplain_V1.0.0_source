@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:nabu_explain/core/theme/app_theme.dart';
 import 'package:nabu_explain/services/ai/ai_controller.dart';
+import 'package:nabu_explain/services/storage/storage_service.dart';
 import 'package:nabu_explain/widgets/common/cards.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
@@ -33,18 +34,21 @@ class _StepByStepScreenState extends State<StepByStepScreen> {
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
-      final response = await widget.aiController.generateSteps(widget.topic, 'beginner');
+      final response = await widget.aiController.generateSteps(
+        widget.topic,
+        StorageService.instance.cachedSettings['selectedLevel'] as String? ?? 'beginner',
+      );
+      if (!mounted) return;
       setState(() {
         _steps = _parseSteps(response);
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('😕 $e'),
-        ));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('😕 $e'),
+      ));
     }
   }
 
@@ -60,13 +64,13 @@ class _StepByStepScreenState extends State<StepByStepScreen> {
       // Fallback: split by double newlines
       final parts = raw.split(RegExp(r'\n\s*\n'));
       for (int i = 0; i < parts.length; i++) {
-        states[i] = _Step(number: i + 1, content: parts[i].trim());
+        final content = parts[i].trim();
+        if (content.isNotEmpty) steps.add(_Step(number: steps.length + 1, content: content));
       }
     }
     return steps;
   }
 
-  Map<int, _Step> states = {};
 
   Future<void> _notUnderstood() async {
     final current = _steps![_currentIndex];
@@ -76,6 +80,7 @@ class _StepByStepScreenState extends State<StepByStepScreen> {
         '${widget.topic} — étape ${current.number}',
         1,
       );
+      if (!mounted) return;
       setState(() {
         _steps![_currentIndex] = _Step(
           number: current.number,
@@ -84,7 +89,9 @@ class _StepByStepScreenState extends State<StepByStepScreen> {
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('😕 $e')));
     }
   }
 

@@ -29,6 +29,7 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
     _cards[_index] = card;
     await StorageService.instance.saveFlashcard(card);
     await StorageService.instance.incrementProgress('flashcardsReviewed');
+    if (!mounted) return;
     if (_index < _cards.length - 1) {
       setState(() {
         _index++;
@@ -56,6 +57,12 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (_cards.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('🗂️ Flashcards')),
+        body: const Center(child: Text('Aucune flashcard à réviser.')),
+      );
+    }
     final card = _cards[_index];
 
     return Scaffold(

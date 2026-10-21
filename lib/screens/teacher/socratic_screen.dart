@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:nabu_explain/core/theme/app_theme.dart';
 import 'package:nabu_explain/services/ai/ai_controller.dart';
+import 'package:nabu_explain/services/ai/ai_service.dart';
+import 'package:nabu_explain/services/storage/storage_service.dart';
 
 class SocraticScreen extends StatefulWidget {
   final String topic;
@@ -22,6 +24,7 @@ class _SocraticScreenState extends State<SocraticScreen> {
   final List<Map<String, String>> _messages = [];
   bool _isLoading = true;
   int _step = 1;
+  final String _level = StorageService.instance.cachedSettings['selectedLevel'] as String? ?? 'beginner';
 
   @override
   void initState() {
@@ -34,21 +37,30 @@ class _SocraticScreenState extends State<SocraticScreen> {
     try {
       final response = await widget.aiController.generateSocratic(
         widget.topic,
-        'beginner',
+        _level,
       );
+      if (!mounted) return;
       setState(() {
         _messages.add({'sender': 'ai', 'text': response});
         _isLoading = false;
       });
     } catch (e) {
-      setState(() => _isLoading = false);
-      _messages.add({'sender': 'ai', 'text': '😕 $e'});
+      if (!mounted) return;
+      setState(() {
+        _messages.add({'sender': 'ai', 'text': '😕 $e'});
+        _isLoading = false;
+      });
     }
   }
 
   Future<void> _send() async {
     final text = _controller.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isLoading) return;
+    final history = [
+      for (final m in _messages)
+        if (!(m['text'] ?? '').startsWith('😕'))
+          AIMessage(role: m['sender'] == 'user' ? 'user' : 'assistant', content: m['text'] ?? ''),
+    ];
     _controller.clear();
     setState(() {
       _messages.add({'sender': 'user', 'text': text});
@@ -59,13 +71,16 @@ class _SocraticScreenState extends State<SocraticScreen> {
       final followUp = await widget.aiController.simpleChat(
         'Méthode socratique sur "${widget.topic}". L\'élève a répondu : "$text". '
         'Adapte ta prochaine question en fonction. Sois progressif, à l\'étape $_step.',
-        'beginner',
+        _level,
+        history: history,
       );
+      if (!mounted) return;
       setState(() {
         _messages.add({'sender': 'ai', 'text': followUp});
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _messages.add({'sender': 'ai', 'text': '😕 $e'});
         _isLoading = false;

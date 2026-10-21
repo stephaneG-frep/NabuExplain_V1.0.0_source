@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -12,8 +13,28 @@ class StorageService {
   static final StorageService instance = StorageService._();
   StorageService._();
 
+  static const Map<String, dynamic> defaultSettings = {
+    'darkMode': false,
+    'onboardingDone': false,
+    'provider': 'OpenAI',
+    'model': 'gpt-4o-mini',
+    'selectedLevel': 'beginner',
+    'complexity': 50,
+    'ollamaUrl': 'http://10.0.2.2:11434',
+  };
+
   final _secureStorage = const FlutterSecureStorage();
   Directory? _baseDir;
+  Map<String, dynamic>? _settingsCache;
+
+  // Sérialise les lectures-modifications-écritures (paramètres, progression)
+  // pour que deux mises à jour simultanées ne s'écrasent pas.
+  Future<void> _lock = Future.value();
+
+  // Notifie les providers qu'une collection a changé ('explanations', 'memos',
+  // 'flashcards', 'quiz', 'exercises', 'conversations', 'progress').
+  final _changes = StreamController<String>.broadcast();
+  Stream<String> get changes => _changes.stream;
 
   static Future<void> init() async {
     try {
@@ -35,6 +56,7 @@ class StorageService {
       final dir = Directory(p.join(instance._baseDir!.path, d));
       if (!await dir.exists()) await dir.create(recursive: true);
     }
+    await instance.loadSettings();
   }
 
   Directory get baseDir {
@@ -57,6 +79,27 @@ class StorageService {
   String get progressFile => p.join(baseDir.path, 'nabu/progress/progress.json');
   String get settingsFile => p.join(baseDir.path, 'nabu/settings.json');
 
+  Future<T> _synchronized<T>(Future<T> Function() action) {
+    final previous = _lock;
+    final done = Completer<void>();
+    _lock = done.future;
+    return previous.then((_) => action()).whenComplete(done.complete);
+  }
+
+  /// Écrit dans un fichier temporaire puis renomme : un crash pendant
+  /// l'écriture ne laisse jamais un JSON à moitié écrit.
+  Future<void> _writeJson(String path, Object data) async {
+    final file = File(path);
+    await file.parent.create(recursive: true);
+    final tmp = File('$path.tmp');
+    await tmp.writeAsString(jsonEncode(data), flush: true);
+    await tmp.rename(path);
+  }
+
+  void _notify(String collection) {
+    if (!_changes.isClosed) _changes.add(collection);
+  }
+
   // ── Secure storage (API keys) ──────────────────────────────
   Future<void> saveApiKey(String provider, String key) async {
     await _secureStorage.write(key: 'nabu_api_$provider', value: key);
@@ -71,25 +114,33 @@ class StorageService {
   }
 
   // ── Settings ───────────────────────────────────────────────
+  /// Paramètres connus en mémoire (valeurs par défaut avant [init]).
+  Map<String, dynamic> get cachedSettings => {...defaultSettings, ...?_settingsCache};
+
   Future<Map<String, dynamic>> loadSettings() async {
+    if (_settingsCache != null) return {..._settingsCache!};
+    final settings = {...defaultSettings};
     final file = File(settingsFile);
-    if (await file.exists()) {
-      final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
-      return data;
+    try {
+      if (await file.exists()) {
+        settings.addAll(jsonDecode(await file.readAsString()) as Map<String, dynamic>);
+      }
+    } catch (_) {
+      // Fichier corrompu : on repart des valeurs par défaut plutôt que planter.
     }
-    return {
-      'darkMode': false,
-      'onboardingDone': false,
-      'provider': 'OpenAI',
-      'model': 'gpt-4o-mini',
-      'selectedLevel': 'beginner',
-      'complexity': 50,
-    };
+    _settingsCache = settings;
+    return {...settings};
   }
 
-  Future<void> saveSettings(Map<String, dynamic> settings) async {
-    final file = File(settingsFile);
-    await file.writeAsString(jsonEncode(settings));
+  /// Fusionne [changes] dans les paramètres enregistrés et renvoie le résultat.
+  Future<Map<String, dynamic>> updateSettings(Map<String, dynamic> changes) {
+    return _synchronized(() async {
+      final settings = await loadSettings();
+      settings.addAll(changes);
+      await _writeJson(settingsFile, settings);
+      _settingsCache = settings;
+      return {...settings};
+    });
   }
 
   Future<bool> getOnboardingDone() async {
@@ -98,9 +149,7 @@ class StorageService {
   }
 
   Future<void> setOnboardingDone() async {
-    final s = await loadSettings();
-    s['onboardingDone'] = true;
-    await saveSettings(s);
+    await updateSettings({'onboardingDone': true});
   }
 
   Future<bool> getDarkMode() async {
@@ -109,14 +158,13 @@ class StorageService {
   }
 
   Future<void> setDarkMode(bool dark) async {
-    final s = await loadSettings();
-    s['darkMode'] = dark;
-    await saveSettings(s);
+    await updateSettings({'darkMode': dark});
   }
 
   // ── Images ─────────────────────────────────────────────────
   Future<String> saveImage(File file, {String? prefix}) async {
-    final filename = '${prefix ?? 'img'}_${DateTime.now().millisecondsSinceEpoch}.${p.extension(file.path)}';
+    // p.extension renvoie déjà le point (".jpg").
+    final filename = '${prefix ?? 'img'}_${DateTime.now().microsecondsSinceEpoch}${p.extension(file.path)}';
     final dest = p.join(imagesDir, filename);
     await file.copy(dest);
     return dest;
@@ -130,90 +178,77 @@ class StorageService {
     return paths;
   }
 
+  // ── Generic JSON collections ───────────────────────────────
+  Future<List<T>> _readAll<T>(String dirPath, T Function(Map<String, dynamic>) fromMap) async {
+    final dir = Directory(dirPath);
+    if (!await dir.exists()) return [];
+    final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
+    final list = <T>[];
+    for (final f in files) {
+      try {
+        list.add(fromMap(jsonDecode(await f.readAsString()) as Map<String, dynamic>));
+      } catch (_) {
+        // Fichier illisible : ignoré pour ne pas bloquer toute la liste.
+      }
+    }
+    return list;
+  }
+
+  Future<void> _delete(String dirPath, String id, String collection) async {
+    final file = File(p.join(dirPath, '$id.json'));
+    if (await file.exists()) await file.delete();
+    _notify(collection);
+  }
+
   // ── Explanations ───────────────────────────────────────────
   Future<Explanation> saveExplanation(Explanation exp) async {
-    final file = File(p.join(explanationsDir, '${exp.id}.json'));
-    await file.writeAsString(jsonEncode(exp.toMap()));
+    await _writeJson(p.join(explanationsDir, '${exp.id}.json'), exp.toMap());
+    _notify('explanations');
     return exp;
   }
 
   Future<List<Explanation>> getExplanations() async {
-    final dir = Directory(explanationsDir);
-    if (!await dir.exists()) return [];
-    final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
-    final list = <Explanation>[];
-    for (final f in files) {
-      try {
-        final data = jsonDecode(await f.readAsString());
-        list.add(Explanation.fromMap(data));
-      } catch (_) {}
-    }
+    final list = await _readAll(explanationsDir, Explanation.fromMap);
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return list;
   }
 
-  Future<void> deleteExplanation(String id) async {
-    final file = File(p.join(explanationsDir, '$id.json'));
-    if (await file.exists()) await file.delete();
-  }
+  Future<void> deleteExplanation(String id) => _delete(explanationsDir, id, 'explanations');
 
   // ── Conversations ──────────────────────────────────────────
   Future<Conversation> saveConversation(Conversation conv) async {
-    final file = File(p.join(conversationsDir, '${conv.id}.json'));
-    await file.writeAsString(jsonEncode(conv.toMap()));
+    await _writeJson(p.join(conversationsDir, '${conv.id}.json'), conv.toMap());
+    _notify('conversations');
     return conv;
   }
 
   Future<List<Conversation>> getConversations() async {
-    final dir = Directory(conversationsDir);
-    if (!await dir.exists()) return [];
-    final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
-    final list = <Conversation>[];
-    for (final f in files) {
-      try {
-        final data = jsonDecode(await f.readAsString());
-        list.add(Conversation.fromMap(data));
-      } catch (_) {}
-    }
+    final list = await _readAll(conversationsDir, Conversation.fromMap);
     list.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     return list;
   }
 
-  Future<void> deleteConversation(String id) async {
-    final file = File(p.join(conversationsDir, '$id.json'));
-    if (await file.exists()) await file.delete();
-  }
+  Future<void> deleteConversation(String id) => _delete(conversationsDir, id, 'conversations');
 
   // ── Memos ──────────────────────────────────────────────────
   Future<MemoCard> saveMemo(MemoCard memo) async {
-    final file = File(p.join(fichesDir, '${memo.id}.json'));
-    await file.writeAsString(jsonEncode(memo.toMap()));
+    await _writeJson(p.join(fichesDir, '${memo.id}.json'), memo.toMap());
+    _notify('memos');
     return memo;
   }
 
   Future<List<MemoCard>> getMemos() async {
-    final dir = Directory(fichesDir);
-    if (!await dir.exists()) return [];
-    final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
-    final list = <MemoCard>[];
-    for (final f in files) {
-      try {
-        list.add(MemoCard.fromMap(jsonDecode(await f.readAsString())));
-      } catch (_) {}
-    }
+    final list = await _readAll(fichesDir, MemoCard.fromMap);
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return list;
   }
 
-  Future<void> deleteMemo(String id) async {
-    final file = File(p.join(fichesDir, '$id.json'));
-    if (await file.exists()) await file.delete();
-  }
+  Future<void> deleteMemo(String id) => _delete(fichesDir, id, 'memos');
 
   // ── Flashcards ─────────────────────────────────────────────
   Future<Flashcard> saveFlashcard(Flashcard card) async {
-    final file = File(p.join(flashcardsDir, '${card.id}.json'));
-    await file.writeAsString(jsonEncode(card.toMap()));
+    await _writeJson(p.join(flashcardsDir, '${card.id}.json'), card.toMap());
+    _notify('flashcards');
     return card;
   }
 
@@ -224,62 +259,35 @@ class StorageService {
   }
 
   Future<List<Flashcard>> getFlashcards() async {
-    final dir = Directory(flashcardsDir);
-    if (!await dir.exists()) return [];
-    final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
-    final list = <Flashcard>[];
-    for (final f in files) {
-      try {
-        list.add(Flashcard.fromMap(jsonDecode(await f.readAsString())));
-      } catch (_) {}
-    }
+    final list = await _readAll(flashcardsDir, Flashcard.fromMap);
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return list;
   }
 
-  Future<void> deleteFlashcard(String id) async {
-    final file = File(p.join(flashcardsDir, '$id.json'));
-    if (await file.exists()) await file.delete();
-  }
+  Future<void> deleteFlashcard(String id) => _delete(flashcardsDir, id, 'flashcards');
 
   // ── Quiz ───────────────────────────────────────────────────
   Future<Quiz> saveQuiz(Quiz quiz) async {
-    final file = File(p.join(quizDir, '${quiz.id}.json'));
-    await file.writeAsString(jsonEncode(quiz.toMap()));
+    await _writeJson(p.join(quizDir, '${quiz.id}.json'), quiz.toMap());
+    _notify('quiz');
     return quiz;
   }
 
   Future<List<Quiz>> getQuizzes() async {
-    final dir = Directory(quizDir);
-    if (!await dir.exists()) return [];
-    final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
-    final list = <Quiz>[];
-    for (final f in files) {
-      try {
-        list.add(Quiz.fromMap(jsonDecode(await f.readAsString())));
-      } catch (_) {}
-    }
+    final list = await _readAll(quizDir, Quiz.fromMap);
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return list;
   }
 
   // ── Exercises ──────────────────────────────────────────────
   Future<Exercise> saveExercise(Exercise ex) async {
-    final file = File(p.join(exercisesDir, '${ex.id}.json'));
-    await file.writeAsString(jsonEncode(ex.toMap()));
+    await _writeJson(p.join(exercisesDir, '${ex.id}.json'), ex.toMap());
+    _notify('exercises');
     return ex;
   }
 
   Future<List<Exercise>> getExercises() async {
-    final dir = Directory(exercisesDir);
-    if (!await dir.exists()) return [];
-    final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.json'));
-    final list = <Exercise>[];
-    for (final f in files) {
-      try {
-        list.add(Exercise.fromMap(jsonDecode(await f.readAsString())));
-      } catch (_) {}
-    }
+    final list = await _readAll(exercisesDir, Exercise.fromMap);
     list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     return list;
   }
@@ -300,20 +308,43 @@ class StorageService {
   }
 
   Future<void> saveProgress(ProgressData progress) async {
-    final file = File(progressFile);
-    await file.writeAsString(jsonEncode(progress.toMap()));
+    await _writeJson(progressFile, progress.toMap());
+    _notify('progress');
+  }
+
+  /// Lecture-modification-écriture atomique de la progression.
+  Future<ProgressData> updateProgress(void Function(ProgressData progress) change) {
+    return _synchronized(() async {
+      final progress = await loadProgress();
+      change(progress);
+      await saveProgress(progress);
+      return progress;
+    });
   }
 
   Future<void> incrementProgress(String field, {int amount = 1}) async {
-    final p = await loadProgress();
-    final newP = p;
-    switch (field) {
-      case 'topicsStudied': newP.topicsStudied += amount; break;
-      case 'explanationsViewed': newP.explanationsViewed += amount; break;
-      case 'quizzesTaken': newP.quizzesTaken += amount; break;
-      case 'exercisesDone': newP.exercisesDone += amount; break;
-      case 'flashcardsReviewed': newP.flashcardsReviewed += amount; break;
-    }
-    await saveProgress(newP);
+    await updateProgress((p) {
+      switch (field) {
+        case 'topicsStudied': p.topicsStudied += amount; break;
+        case 'explanationsViewed': p.explanationsViewed += amount; break;
+        case 'quizzesTaken': p.quizzesTaken += amount; break;
+        case 'exercisesDone': p.exercisesDone += amount; break;
+        case 'flashcardsReviewed': p.flashcardsReviewed += amount; break;
+      }
+    });
+  }
+
+  /// Enregistre un quiz terminé : met à jour le taux de réussite global et la
+  /// liste des sujets à revoir (ajouté sous 60 % de réussite, retiré au-dessus).
+  Future<void> recordQuizResult({required String topic, required int score, required int total}) async {
+    if (total <= 0) return;
+    await updateProgress((p) {
+      p.quizzesTaken++;
+      p.quizCorrectAnswers += score;
+      p.quizTotalQuestions += total;
+      final rate = score / total;
+      p.topicsToReview.remove(topic);
+      if (rate < 0.6) p.topicsToReview.insert(0, topic);
+    });
   }
 }

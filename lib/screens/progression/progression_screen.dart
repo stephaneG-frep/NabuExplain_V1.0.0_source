@@ -30,7 +30,7 @@ class _ProgressionScreenState extends ConsumerState<ProgressionScreen> {
         ),
         child: SafeArea(
           child: ref.watch(progressProvider).when(
-            data: (data) => _buildContent(context, data as ProgressData),
+            data: (data) => _buildContent(context, data),
             loading: () => const Center(child: CircularProgressIndicator()),
             error: (e, _) => const Center(child: Text('Erreur de chargement')),
           ),

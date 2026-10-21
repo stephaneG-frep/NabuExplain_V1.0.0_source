@@ -135,6 +135,15 @@ class QuizQuestion {
     this.isCorrect,
   }) : id = id ?? const Uuid().v4();
 
+  /// Copie sans réponse de l'élève (copyWith ne peut pas remettre à null).
+  QuizQuestion reset() {
+    return QuizQuestion(
+      id: id, question: question, type: type,
+      options: options, correctAnswer: correctAnswer,
+      explanation: explanation,
+    );
+  }
+
   QuizQuestion copyWith({String? userAnswer, bool? isCorrect}) {
     return QuizQuestion(
       id: id, question: question, type: type,
@@ -205,7 +214,8 @@ class ProgressData {
   int quizzesTaken;
   int exercisesDone;
   int flashcardsReviewed;
-  double successRate;
+  int quizCorrectAnswers;
+  int quizTotalQuestions;
   List<String> topicsToReview;
 
   ProgressData({
@@ -214,9 +224,14 @@ class ProgressData {
     this.quizzesTaken = 0,
     this.exercisesDone = 0,
     this.flashcardsReviewed = 0,
-    this.successRate = 0.0,
-    this.topicsToReview = const [],
-  });
+    this.quizCorrectAnswers = 0,
+    this.quizTotalQuestions = 0,
+    List<String>? topicsToReview,
+  }) : topicsToReview = topicsToReview ?? [];
+
+  /// Taux de réussite global aux quiz, en pourcentage.
+  double get successRate =>
+      quizTotalQuestions == 0 ? 0.0 : quizCorrectAnswers / quizTotalQuestions * 100;
 
   Map<String, dynamic> toMap() => {
     'topicsStudied': topicsStudied,
@@ -224,6 +239,8 @@ class ProgressData {
     'quizzesTaken': quizzesTaken,
     'exercisesDone': exercisesDone,
     'flashcardsReviewed': flashcardsReviewed,
+    'quizCorrectAnswers': quizCorrectAnswers,
+    'quizTotalQuestions': quizTotalQuestions,
     'successRate': successRate,
     'topicsToReview': topicsToReview,
   };
@@ -234,7 +251,8 @@ class ProgressData {
     quizzesTaken: map['quizzesTaken'] ?? 0,
     exercisesDone: map['exercisesDone'] ?? 0,
     flashcardsReviewed: map['flashcardsReviewed'] ?? 0,
-    successRate: (map['successRate'] ?? 0).toDouble(),
+    quizCorrectAnswers: map['quizCorrectAnswers'] ?? 0,
+    quizTotalQuestions: map['quizTotalQuestions'] ?? 0,
     topicsToReview: List<String>.from(map['topicsToReview'] ?? []),
   );
 }

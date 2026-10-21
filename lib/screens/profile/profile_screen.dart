@@ -116,7 +116,7 @@ class ProfileScreen extends ConsumerWidget {
                 label: 'Mode sombre',
                 description: isDark ? 'Activé - touche pour désactiver' : 'Désactivé - touche pour activer',
                 color: NabuColors.blueDeep,
-                onTap: () => ref.read(darkModeProvider.notifier).toggle(),
+                onTap: () => ref.read(settingsProvider.notifier).toggleDarkMode(),
               ),
               _MenuItem(
                 icon: Icons.menu_book_outlined,

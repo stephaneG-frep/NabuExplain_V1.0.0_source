@@ -13,11 +13,47 @@ class QuizScreen extends StatefulWidget {
   State<QuizScreen> createState() => _QuizScreenState();
 }
 
+/// Compare la réponse de l'élève à la bonne réponse sans tenir compte de la
+/// casse, des accents ni de la ponctuation. Pour les réponses libres, une
+/// réponse qui contient la bonne réponse (« c'est Paris » pour « Paris ») est
+/// aussi acceptée.
+bool quizAnswerMatches(String answer, String correct, {bool freeText = false}) {
+  final a = normalizeAnswer(answer);
+  final c = normalizeAnswer(correct);
+  if (a.isEmpty || c.isEmpty) return false;
+  if (a == c) return true;
+  if (!freeText) return false;
+  return c.length >= 3 && ' $a '.contains(' $c ');
+}
+
+String normalizeAnswer(String s) {
+  const accents = {
+    'à': 'a', 'â': 'a', 'ä': 'a', 'á': 'a', 'ã': 'a',
+    'ç': 'c',
+    'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
+    'î': 'i', 'ï': 'i', 'í': 'i',
+    'ô': 'o', 'ö': 'o', 'ó': 'o', 'õ': 'o',
+    'ù': 'u', 'û': 'u', 'ü': 'u', 'ú': 'u',
+    'ÿ': 'y', 'œ': 'oe', 'æ': 'ae', 'ñ': 'n',
+  };
+  final buffer = StringBuffer();
+  for (final ch in s.toLowerCase().split('')) {
+    buffer.write(accents[ch] ?? ch);
+  }
+  return buffer
+      .toString()
+      .replaceAll(RegExp(r"[^\w\s]"), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
 class _QuizScreenState extends State<QuizScreen> {
   late Quiz _quiz;
   int _currentIndex = 0;
   bool _answered = false;
+  bool _reviewing = false;
   String? _selected;
+  final _answerController = TextEditingController();
 
   @override
   void initState() {
@@ -25,13 +61,22 @@ class _QuizScreenState extends State<QuizScreen> {
     _quiz = widget.quiz;
   }
 
+  @override
+  void dispose() {
+    _answerController.dispose();
+    super.dispose();
+  }
+
+  bool _matches(String answer, QuizQuestion q) =>
+      quizAnswerMatches(answer, q.correctAnswer, freeText: q.options.isEmpty);
+
   Future<void> _answer(String answer) async {
-    if (_answered) return;
+    if (_answered || answer.trim().isEmpty) return;
     setState(() {
       _selected = answer;
       _answered = true;
       final q = _quiz.questions[_currentIndex];
-      final correct = answer.trim().toLowerCase() == q.correctAnswer.trim().toLowerCase();
+      final correct = _matches(answer, q);
       _quiz.questions[_currentIndex] = q.copyWith(
         userAnswer: answer,
         isCorrect: correct,
@@ -42,18 +87,32 @@ class _QuizScreenState extends State<QuizScreen> {
     });
   }
 
+  void _showQuestion(int index) {
+    _currentIndex = index;
+    _answerController.clear();
+    if (_reviewing) {
+      _answered = true;
+      _selected = _quiz.questions[index].userAnswer;
+    } else {
+      _answered = false;
+      _selected = null;
+    }
+  }
+
   Future<void> _next() async {
     if (_currentIndex < _quiz.questions.length - 1) {
-      setState(() {
-        _currentIndex++;
-        _answered = false;
-        _selected = null;
-      });
+      setState(() => _showQuestion(_currentIndex + 1));
+    } else if (_reviewing) {
+      Navigator.pop(context);
     } else {
       // Save quiz result
       await StorageService.instance.saveQuiz(_quiz);
       final rate = (_quiz.score / _quiz.questions.length * 100).round();
-      await StorageService.instance.incrementProgress('quizzesTaken');
+      await StorageService.instance.recordQuizResult(
+        topic: _quiz.topic,
+        score: _quiz.score,
+        total: _quiz.questions.length,
+      );
       if (!mounted) return;
       showDialog(
         context: context,
@@ -64,20 +123,17 @@ class _QuizScreenState extends State<QuizScreen> {
           onRetry: () {
             Navigator.pop(context);
             setState(() {
-              _currentIndex = 0;
-              _answered = false;
-              _selected = null;
+              _reviewing = false;
               _quiz.score = 0;
-              _quiz.questions = [
-                for (final q in _quiz.questions) q.copyWith(userAnswer: null, isCorrect: null),
-              ];
+              _quiz.questions = [for (final q in _quiz.questions) q.reset()];
+              _showQuestion(0);
             });
           },
           onReview: () {
             Navigator.pop(context);
             setState(() {
-              _currentIndex = 0;
-              _answered = true;
+              _reviewing = true;
+              _showQuestion(0);
             });
           },
         ),
@@ -88,6 +144,12 @@ class _QuizScreenState extends State<QuizScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (_quiz.questions.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('🎯 Quiz')),
+        body: const Center(child: Text('Ce quiz ne contient aucune question.')),
+      );
+    }
     final question = _quiz.questions[_currentIndex];
 
     return Scaffold(
@@ -123,7 +185,7 @@ class _QuizScreenState extends State<QuizScreen> {
                       ),
                       const Spacer(),
                       Text(
-                        'Score : $_quiz.score',
+                        'Score : ${_quiz.score}',
                         style: const TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
@@ -180,13 +242,15 @@ class _QuizScreenState extends State<QuizScreen> {
     }
   }
 
-  List<Widget> _buildOptions(dynamic q) {
-    final options = q.options as List;
+  List<Widget> _buildOptions(QuizQuestion q) {
+    final options = q.options;
     if (options.isEmpty) {
       // Short answer or code_fill
-      final controller = TextEditingController();
-      WidgetsBinding.instance.addPostFrameCallback((_) {});
+      final controller = _answerController;
       return [
+        if (_reviewing && q.userAnswer != null)
+          Text('Ta réponse : ${q.userAnswer}', style: const TextStyle(fontWeight: FontWeight.w700))
+        else
         TextField(
           controller: controller,
           decoration: InputDecoration(
@@ -218,15 +282,14 @@ class _QuizScreenState extends State<QuizScreen> {
             onTap: () => _answer(option),
             selected: _selected == option,
             revealed: _answered,
-            isCorrect: option.trim().toLowerCase() == q.correctAnswer.trim().toLowerCase(),
+            isCorrect: _matches(option, q),
           ),
         ),
     ];
   }
 
-  Widget _buildCorrection(dynamic q) {
-    final correct = _selected != null &&
-        _selected!.trim().toLowerCase() == q.correctAnswer.trim().toLowerCase();
+  Widget _buildCorrection(QuizQuestion q) {
+    final correct = q.isCorrect ?? (_selected != null && _matches(_selected!, q));
 
     return Container(
       width: double.infinity,
@@ -276,7 +339,9 @@ class _QuizScreenState extends State<QuizScreen> {
           ],
           const SizedBox(height: 12),
           NabuButton(
-            label: _currentIndex < _quiz.questions.length - 1 ? 'Question suivante ▶' : 'Voir le résultat 🏁',
+            label: _currentIndex < _quiz.questions.length - 1
+                ? 'Question suivante ▶'
+                : _reviewing ? 'Terminer la révision' : 'Voir le résultat 🏁',
             onPressed: _next,
           ),
         ],

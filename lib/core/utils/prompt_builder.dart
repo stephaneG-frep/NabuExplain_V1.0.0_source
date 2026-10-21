@@ -1,4 +1,15 @@
 class PromptBuilder {
+  static String levelLabel(String level) {
+    switch (level) {
+      case 'very_simple': return 'très simple (enfant de 5 ans)';
+      case 'beginner': return 'débutant';
+      case 'intermediate': return 'intermédiaire';
+      case 'advanced': return 'avancé';
+      case 'expert': return 'expert';
+      default: return level;
+    }
+  }
+
   static String levelInstruction(String level) {
     switch (level) {
       case 'very_simple':
@@ -110,23 +121,10 @@ Produis une explication complète avec ces sections :
 Enseigne plutôt que de simplement donner une commande à copier.""";
   }
 
-  static String buildErrorDetectPrompt(String rawText) {
-    return """
-Voici un texte. Détermine s'il s'agit d'une erreur/exception/stack trace.
-
-$rawText
-
-Répond par:
-- "OUI" si c'est une erreur/exception/stack trace
-- "NON" sinon
-
-Répond uniquement par OUI ou NON.""";
-  }
-
   static String buildQuizPrompt(String topic, String level) {
     return """
 Crée un quiz de 5 questions sur le sujet : "$topic"
-Niveau : $level
+Niveau : ${levelLabel(level)}
 
 Génère un JSON valide avec cette structure exacte :
 {
@@ -148,7 +146,7 @@ Répond UNIQUEMENT avec le JSON, sans texte autour.""";
     return """
 Crée un exercice progressif sur le sujet : "$topic"
 Difficulté : $difficulty
-Niveau utilisateur : $level
+Niveau utilisateur : ${levelLabel(level)}
 
 Réponds avec ce format :
 
@@ -200,9 +198,12 @@ Format de réponse :
   }
 
   static String buildAnalogiePrompt(String explanation, String topic) {
+    final previous = explanation.trim().isEmpty || explanation == topic
+        ? ''
+        : '\nVoici l\'explication que l\'élève a déjà reçue (ne la répète pas) :\n$explanation\n';
     return """
 Le sujet est : "$topic"
-
+$previous
 Trouve une analogie parfaite pour l'expliquer (cuisine, maison, voiture, bibliothèque, Lego, courrier, ville, sport...).
 
 Récupère l'analogie la plus efficace PUIS explique le sujet en t'appuyant dessus.
@@ -216,7 +217,7 @@ Structure :
 
   static String buildStepPrompt(String topic, String level) {
     return """
-Explique le sujet "$topic" étape par étape pour un niveau $level.
+Explique le sujet "$topic" étape par étape pour un niveau ${levelLabel(level)}.
 
 Crée exactement 5 étapes progressives.
 
@@ -237,7 +238,7 @@ Format pour chaque étape :
   static String buildSocraticPrompt(String topic, String level) {
     return """
 Sujet : "$topic"
-Niveau : $level
+Niveau : ${levelLabel(level)}
 
 Adopte la méthode socratique. Ne donne PAS la réponse directement.
 Guide l'élève avec des questions progressives.
@@ -283,7 +284,7 @@ Repart de zéro, comme si tu n'avais jamais expliqué le sujet.""";
   static String buildLearnPrompt(String topic, String level) {
     return """
 Crée un parcours d'apprentissage complet sur : "$topic"
-Niveau : $level
+Niveau : ${levelLabel(level)}
 
 Structure en 7 chapitres exactement :
 1. Introduction (pourquoi ce sujet est important)

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:nabu_explain/core/theme/app_theme.dart';
 import 'package:nabu_explain/services/ai/ai_controller.dart';
+import 'package:nabu_explain/services/storage/storage_service.dart';
 import 'package:nabu_explain/widgets/common/cards.dart';
 
 class LearnScreen extends StatefulWidget {
@@ -32,14 +33,21 @@ class _LearnScreenState extends State<LearnScreen> {
   Future<void> _load() async {
     setState(() => _isLoading = true);
     try {
-      final response = await widget.aiController.generateLearn(widget.topic, 'beginner');
+      final response = await widget.aiController.generateLearn(
+        widget.topic,
+        StorageService.instance.cachedSettings['selectedLevel'] as String? ?? 'beginner',
+      );
+      if (!mounted) return;
       setState(() {
         _chapters = _parseChapters(response);
         _isLoading = false;
       });
     } catch (e) {
-      setState(() => _isLoading = false);
-      _chapters = [_Chapter(number: 1, title: 'Erreur', content: '😕 $e')];
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _chapters = [_Chapter(number: 1, title: 'Erreur', content: '😕 $e')];
+      });
     }
   }
 

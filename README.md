@@ -92,11 +92,15 @@ Génère et partage un PDF propre depuis Android.
 4. Teste la connexion
 
 **Fournisseurs supportés :**
-- OpenAI (gpt-4o, gpt-4o-mini, o1-preview, etc.)
-- Claude (claude-sonnet-4-20250514, etc.)
-- Gemini (gemini-1.5-pro, gemini-2.0-flash, etc.)
-- Mistral (mistral-large-latest, etc.)
-- Ollama (llama3.1, mistral, codellama, etc.)
+- OpenAI (gpt-4o-mini, gpt-4o, gpt-4.1, gpt-5, etc.)
+- Claude (claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5)
+- Gemini (gemini-2.5-flash, gemini-2.5-pro, etc.)
+- Mistral (mistral-large-latest, pixtral-large-latest pour les images, etc.)
+- Ollama (llama3.1, llama3.2-vision, qwen2.5-coder, etc.) — sans clé API
+
+Un autre modèle peut être saisi via « Autre modèle… ».
+
+**Ollama sur un vrai téléphone :** lance Ollama avec `OLLAMA_HOST=0.0.0.0`, puis indique l'adresse IP de ta machine dans les paramètres (ex. `http://192.168.1.10:11434`). L'adresse par défaut `http://10.0.2.2:11434` ne fonctionne que dans l'émulateur.
 
 ---
 

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:nabu_explain/core/constants/app_constants.dart';
 import 'package:nabu_explain/core/theme/app_theme.dart';
+import 'package:nabu_explain/models/conversation.dart';
 import 'package:nabu_explain/models/explanation.dart';
 import 'package:nabu_explain/models/models.dart';
 import 'package:nabu_explain/providers/app_provider.dart';
@@ -11,6 +12,7 @@ import 'package:nabu_explain/services/pdf/pdf_service.dart';
 import 'package:nabu_explain/services/storage/storage_service.dart';
 import 'package:nabu_explain/widgets/common/cards.dart';
 import 'package:nabu_explain/screens/teacher/flashcards_screen.dart';
+import 'package:nabu_explain/screens/teacher/teacher_screen.dart';
 
 class LibraryScreen extends ConsumerStatefulWidget {
   const LibraryScreen({super.key});
@@ -69,6 +71,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                         ref.invalidate(explanationsProvider);
                         ref.invalidate(memosProvider);
                         ref.invalidate(flashcardsProvider);
+                        ref.invalidate(conversationsProvider);
                       },
                       icon: const Icon(Icons.refresh),
                     ),
@@ -94,7 +97,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                   scrollDirection: Axis.horizontal,
                   child: Row(
                     children: [
-                      _TabChip(label: 'Expliquations', icon: '💬', selected: _tab == 0, onTap: () => setState(() => _tab = 0)),
+                      _TabChip(label: 'Explications', icon: '💬', selected: _tab == 0, onTap: () => setState(() => _tab = 0)),
                       _TabChip(label: 'Fiches mémo', icon: '📝', selected: _tab == 1, onTap: () => setState(() => _tab = 1)),
                       _TabChip(label: 'Flashcards', icon: '🗂️', selected: _tab == 2, onTap: () => setState(() => _tab = 2)),
                       _TabChip(label: 'Historique', icon: '🕐', selected: _tab == 3, onTap: () => setState(() => _tab = 3)),
@@ -148,7 +151,7 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
               return matchesQuery && matchesCat;
             }).toList();
             if (list.isEmpty) {
-              return const _EmptyLibrary(message: 'Aucune explicacion sauvegardée.\n💡 Demande « Sauvegarder » pendant une conversation.');
+              return const _EmptyLibrary(message: 'Aucune explication sauvegardée.\n💡 Demande « Sauvegarder » pendant une conversation.');
             }
             return ListView.builder(
               padding: const EdgeInsets.all(16),
@@ -247,14 +250,17 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       case 3:
         return ref.watch(conversationsProvider).when(
           data: (data) {
-            final list = data.cast<dynamic>().toList();
+            final q = _query.toLowerCase();
+            final list = data.where((c) =>
+                c.title.toLowerCase().contains(q) ||
+                c.messages.any((m) => m.content.toLowerCase().contains(q))).toList();
             if (list.isEmpty) {
               return const _EmptyLibrary(message: 'Aucun historique.\n💡 Tes conversations apparaîtront ici.');
             }
             return ListView.builder(
               padding: const EdgeInsets.all(16),
               itemCount: list.length,
-              itemBuilder: (context, i) => const _HistoryItem(),
+              itemBuilder: (context, i) => _HistoryItem(conversation: list[i]),
             );
           },
           loading: () => const Center(child: CircularProgressIndicator()),
@@ -464,14 +470,10 @@ class _ExplanationDetail extends StatelessWidget {
                       child: OutlinedButton.icon(
                         icon: const Icon(Icons.picture_as_pdf),
                         label: const Text('Exporter PDF'),
-                        onPressed: () async {
-                          final file = await PdfExportService().exportExplanation(exp);
-                          if (file != null && context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('📄 PDF : ${file.path}')),
-                            );
-                          }
-                        },
+                        onPressed: () => PdfExportService().exportAndShare(
+                          context,
+                          () => PdfExportService().exportExplanation(exp),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -524,14 +526,10 @@ class _MemoCardWidget extends StatelessWidget {
               ),
               IconButton(
                 icon: const Icon(Icons.picture_as_pdf, size: 18),
-                onPressed: () async {
-                  final file = await PdfExportService().exportMemo(memo);
-                  if (file != null && context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('📄 PDF : ${file.path}')),
-                    );
-                  }
-                },
+                onPressed: () => PdfExportService().exportAndShare(
+                  context,
+                  () => PdfExportService().exportMemo(memo),
+                ),
               ),
               IconButton(
                 icon: const Icon(Icons.delete_outline, size: 18),
@@ -575,10 +573,61 @@ class _EmptyLibrary extends StatelessWidget {
 }
 
 class _HistoryItem extends StatelessWidget {
-  const _HistoryItem();
+  final Conversation conversation;
+  const _HistoryItem({required this.conversation});
 
   @override
   Widget build(BuildContext context) {
-    return const SizedBox.shrink();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final lastMessage = conversation.messages.isEmpty ? '' : conversation.messages.last.content;
+    final dt = conversation.updatedAt;
+    final date = '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')} '
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+
+    return GlassCard(
+      margin: const EdgeInsets.only(bottom: 10),
+      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => TeacherScreen(conversation: conversation),
+      )),
+      child: Row(
+        children: [
+          const Text('🕐', style: TextStyle(fontSize: 20)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  conversation.title.isEmpty ? 'Conversation' : conversation.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: isDark ? Colors.white : NabuColors.blueDeep,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$date • ${conversation.messages.length} messages',
+                  style: TextStyle(fontSize: 11, color: isDark ? Colors.white38 : Colors.grey),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  lastMessage.replaceAll('\n', ' '),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, size: 18),
+            onPressed: () => StorageService.instance.deleteConversation(conversation.id),
+          ),
+        ],
+      ),
+    );
   }
 }

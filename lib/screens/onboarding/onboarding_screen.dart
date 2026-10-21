@@ -176,7 +176,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }
 
   Future<void> _complete(BuildContext context) async {
-    await ref.read(onboardingDoneProvider.notifier).complete();
+    await ref.read(settingsProvider.notifier).completeOnboarding();
     if (context.mounted) {
       Navigator.of(context).pushNamedAndRemoveUntil('/home', (r) => false);
     }

@@ -8,6 +8,7 @@ import 'package:nabu_explain/core/constants/app_constants.dart';
 import 'package:nabu_explain/models/conversation.dart';
 import 'package:nabu_explain/models/explanation.dart';
 import 'package:nabu_explain/models/models.dart';
+import 'package:nabu_explain/providers/app_provider.dart';
 import 'package:nabu_explain/services/ai/ai_controller.dart';
 import 'package:nabu_explain/services/ai/ai_service.dart';
 import 'package:nabu_explain/services/pdf/pdf_service.dart';
@@ -28,11 +29,15 @@ class TeacherScreen extends ConsumerStatefulWidget {
   final String initialType;
   final List<String>? initialImages;
 
+  /// Conversation de l'historique à reprendre.
+  final Conversation? conversation;
+
   const TeacherScreen({
     super.key,
     this.initialPrompt,
     this.initialType = 'notion',
     this.initialImages,
+    this.conversation,
   });
 
   @override
@@ -40,6 +45,12 @@ class TeacherScreen extends ConsumerStatefulWidget {
 }
 
 class _TeacherScreenState extends ConsumerState<TeacherScreen> {
+  // Nombre de messages précédents envoyés à l'IA comme contexte.
+  static const _historyLength = 10;
+
+  // Textes pré-remplis par l'accueil : ce sont des intitulés, pas des questions.
+  static const _prefills = ['💻 Ex', '🐞 C', '📚 C', '📄 A', '➗ E', '💬 D'];
+
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
   final _aiController = AIController();
@@ -55,31 +66,46 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
   String? _lastExplanation;
   Explanation? _savedExplanation;
   List<String> _pendingImages = [];
+  List<String> _lastImages = [];
+  late String _conversationId;
+  late DateTime _conversationCreatedAt;
 
   @override
   void initState() {
     super.initState();
-    _level = 'beginner';
+    final settings = ref.read(settingsProvider);
+    _level = settings['selectedLevel'] as String? ?? 'beginner';
+    _complexity = settings['complexity'] as int? ?? 50;
     _currentType = widget.initialType;
     _pendingImages = widget.initialImages ?? [];
 
+    final conversation = widget.conversation ?? Conversation(title: '');
+    _conversationId = conversation.id;
+    _conversationCreatedAt = conversation.createdAt;
+    if (widget.conversation != null) {
+      _messages.addAll(conversation.messages);
+      _currentTopic = conversation.topic;
+      final lastAI = conversation.messages.lastWhere(
+        (m) => !m.isUser && !m.content.startsWith('😕'),
+        orElse: () => ChatMessage(content: '', isUser: false),
+      );
+      if (lastAI.content.isNotEmpty) _lastExplanation = lastAI.content;
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final prompt = widget.initialPrompt;
-      if (prompt != null && prompt.trim().isNotEmpty && !_isTyping(prompt)) {
+      if (prompt != null && prompt.trim().isNotEmpty && !_isPrefill(prompt)) {
         _handleInitialPrompt(prompt.trim());
       }
     });
   }
 
-  bool _isTyping(String prompt) {
-    for (final type in ['💻 Ex', '🐞 C', '📚 C', '📄 A', '➗ E', '💬 D']) {
-      if (prompt.startsWith(type)) return false;
-    }
-    return false;
+  bool _isPrefill(String prompt) {
+    return _prefills.any(prompt.startsWith);
   }
 
   Future<void> _handleInitialPrompt(String prompt) async {
-    _messages.add(ChatMessage(content: prompt, isUser: true));
+    _messages.add(ChatMessage(content: prompt, isUser: true, imagePaths: List.of(_pendingImages)));
     setState(() {});
     await _process(prompt);
   }
@@ -89,6 +115,10 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
     _controller.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _safeSetState(VoidCallback fn) {
+    if (mounted) setState(fn);
   }
 
   void _scrollToBottom() {
@@ -103,6 +133,28 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
     });
   }
 
+  /// Messages précédents (hors erreurs et hors dernier message de l'élève,
+  /// déjà contenu dans le prompt) envoyés comme contexte à l'IA.
+  List<AIMessage> _history() {
+    final messages = List.of(_messages);
+    if (messages.isNotEmpty && messages.last.isUser) messages.removeLast();
+    final relevant = messages.where((m) => m.isUser || !m.content.startsWith('😕')).toList();
+    final recent = relevant.length > _historyLength
+        ? relevant.sublist(relevant.length - _historyLength)
+        : relevant;
+    return [
+      for (final m in recent) AIMessage(role: m.isUser ? 'user' : 'assistant', content: m.content),
+    ];
+  }
+
+  void _send() {
+    if (_isLoading) return;
+    final text = _controller.text.trim();
+    if (text.isEmpty && _pendingImages.isEmpty) return;
+    _messages.add(ChatMessage(content: text, isUser: true, imagePaths: List.of(_pendingImages)));
+    _process(text);
+  }
+
   Future<void> _process(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty && _pendingImages.isEmpty) return;
@@ -113,9 +165,14 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
     });
     _scrollToBottom();
 
+    final images = List<String>.from(_pendingImages);
+    final history = _history();
     try {
       String response;
-      _currentTopic ??= trimmed.isEmpty ? 'Image' : trimmed;
+      if (_currentTopic == null) {
+        _currentTopic = trimmed.isEmpty ? 'Image' : trimmed;
+        StorageService.instance.incrementProgress('topicsStudied');
+      }
 
       switch (_currentType) {
         case 'code':
@@ -124,54 +181,42 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
             language: CodeView.detectLanguage(trimmed),
             level: _level,
             complexity: _complexity,
+            history: history,
           );
-          _saveExplanation(trimmed, response);
           break;
         case 'error':
           response = await _aiController.explainError(
             error: trimmed,
             context: 'Contexte : application mobile/développement',
             level: _level,
+            history: history,
           );
-          _saveExplanation(trimmed, response);
           break;
-        case 'photo':
-        case 'gallery':
-          final images = List<String>.from(_pendingImages);
+        default:
           final exp = await _aiController.explain(
             query: trimmed.isEmpty ? 'Explique ce que tu vois sur cette image.' : trimmed,
             level: _level,
             complexity: _complexity,
             imagePaths: images,
             type: _currentType,
+            history: history,
           );
           response = exp.response;
-          _saveExplanation(trimmed.isEmpty ? 'Image' : trimmed, response);
-          break;
-        default:
-          final exp = await _aiController.explain(
-            query: trimmed,
-            level: _level,
-            complexity: _complexity,
-            type: _currentType,
-          );
-          response = exp.response;
-          _saveExplanation(trimmed, response);
       }
 
-      _addAIResponse(response);
       _lastExplanation = response;
+      _lastImages = images;
+      _savedExplanation = null;
       _understandAttempts = 0;
       _whyDepth = 0;
+      _addAIResponse(response);
     } on AIException catch (e) {
       _addAIResponse('😕 ${e.message}\n\nVa dans **Profil → Paramètres → IA** pour configurer ta clé API, ou vérifie ta connexion Internet.');
     } catch (e) {
       _addAIResponse('😕 Une erreur est survenue. Vérifie ta connexion Internet et réessaie.\n\nDétail : $e');
     } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-        _pendingImages = [];
-      }
+      _pendingImages = [];
+      _safeSetState(() => _isLoading = false);
       _scrollToBottom();
     }
   }
@@ -183,39 +228,68 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
       level: _level,
       complexity: _complexity,
       type: _currentType,
-      imagePaths: _pendingImages,
+      imagePaths: _lastImages,
       title: _currentTopic,
+      category: _guessCategory(topic),
     );
     await StorageService.instance.saveExplanation(exp);
     _savedExplanation = exp;
   }
 
+  /// Ajoute la réponse et enregistre la conversation dans l'historique, même
+  /// si l'élève a quitté l'écran entre-temps.
   void _addAIResponse(String content) {
     _messages.add(ChatMessage(content: content, isUser: false));
-    setState(() {});
+    _persistConversation();
+    _safeSetState(() {});
     _scrollToBottom();
   }
 
-  Future<void> _reLevel() async {
-    setState(() => _isLoading = true);
-    _addUserBubble('Changer de niveau : ${_levelLabel(_level)}');
+  Future<void> _persistConversation() async {
+    if (_messages.isEmpty) return;
+    final title = _currentTopic ?? _messages.first.content;
+    await StorageService.instance.saveConversation(Conversation(
+      id: _conversationId,
+      title: title.length > 80 ? '${title.substring(0, 80)}…' : title,
+      messages: List.of(_messages),
+      createdAt: _conversationCreatedAt,
+      topic: _currentTopic,
+    ));
+  }
+
+  /// Lance une action IA en gérant le chargement, les erreurs et le cas où
+  /// l'écran est fermé avant la réponse.
+  Future<void> _runAction(String userLabel, Future<String> Function(List<AIMessage> history) action) async {
+    if (_isLoading) return;
+    final history = _history();
+    _addUserBubble(userLabel);
+    _safeSetState(() => _isLoading = true);
     try {
-      final exp = await _aiController.explain(
-        query: _currentTopic!,
-        level: _level,
-        complexity: _complexity,
-        type: _currentType,
-      );
-      final response = exp.response;
-      _addAIResponse(response);
-      _lastExplanation = response;
-      _understandAttempts = 0;
-      _whyDepth = 0;
+      _addAIResponse(await action(history));
     } catch (e) {
       _addAIResponse('😕 ${e.toString()}');
     } finally {
-      setState(() => _isLoading = false);
+      _safeSetState(() => _isLoading = false);
     }
+  }
+
+  Future<void> _reLevel() async {
+    final topic = _currentTopic;
+    if (topic == null) return;
+    await _runAction('Changer de niveau : ${_levelLabel(_level)}', (history) async {
+      final exp = await _aiController.explain(
+        query: topic,
+        level: _level,
+        complexity: _complexity,
+        type: _currentType,
+        history: history,
+      );
+      _lastExplanation = exp.response;
+      _savedExplanation = null;
+      _understandAttempts = 0;
+      _whyDepth = 0;
+      return exp.response;
+    });
   }
 
   String _levelLabel(String key) {
@@ -227,55 +301,31 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
 
   void _addUserBubble(String text) {
     _messages.add(ChatMessage(content: text, isUser: true));
-    setState(() {});
+    _safeSetState(() {});
   }
 
   Future<void> _askWhy() async {
     final topic = _currentTopic ?? 'ce sujet';
     _whyDepth++;
-    _addUserBubble('❓ Pourquoi ?');
-    setState(() => _isLoading = true);
-    try {
-      final response = await _aiController.generateWhy(topic, _whyDepth);
-      _addAIResponse(response);
-    } catch (e) {
-      _addAIResponse('😕 ${e.toString()}');
-    } finally {
-      setState(() => _isLoading = false);
-    }
+    await _runAction('❓ Pourquoi ?', (history) => _aiController.generateWhy(topic, _whyDepth, history: history));
   }
 
   Future<void> _notUnderstood() async {
     _understandAttempts++;
-    _addUserBubble('😕 Je n\'ai toujours pas compris');
-    setState(() => _isLoading = true);
-    try {
-      final response = await _aiController.generateNotUnderstood(
-        _currentTopic ?? 'ce sujet',
-        _understandAttempts,
-      );
-      _addAIResponse(response);
-    } catch (e) {
-      _addAIResponse('😕 ${e.toString()}');
-    } finally {
-      setState(() => _isLoading = false);
-    }
+    await _runAction('😕 Je n\'ai toujours pas compris', (history) => _aiController.generateNotUnderstood(
+          _currentTopic ?? 'ce sujet',
+          _understandAttempts,
+          history: history,
+        ));
   }
 
   Future<void> _analogy() async {
-    _addUserBubble('🎭 Explique avec une analogie');
-    setState(() => _isLoading = true);
-    try {
-      final response = await _aiController.generateAnalogy(
-        _currentTopic ?? 'ce sujet',
-        _currentTopic ?? 'ce sujet',
-      );
-      _addAIResponse(response);
-    } catch (e) {
-      _addAIResponse('😕 ${e.toString()}');
-    } finally {
-      setState(() => _isLoading = false);
-    }
+    final topic = _currentTopic ?? 'ce sujet';
+    await _runAction('🎭 Explique avec une analogie', (history) => _aiController.generateAnalogy(
+          _lastExplanation ?? '',
+          topic,
+          history: history,
+        ));
   }
 
   void _showStepByStep() {
@@ -300,9 +350,10 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
   }
 
   Future<void> _startQuiz() async {
+    if (_isLoading) return;
     final topic = _currentTopic ?? 'ce sujet';
     _addUserBubble('🎯 Teste-moi sur "$topic"');
-    setState(() => _isLoading = true);
+    _safeSetState(() => _isLoading = true);
     try {
       final quiz = await _aiController.generateQuiz(topic, _level);
       if (!mounted) return;
@@ -312,7 +363,7 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
       ));
     } catch (e) {
       _addAIResponse('😕 ${e.toString()}');
-      setState(() => _isLoading = false);
+      _safeSetState(() => _isLoading = false);
     }
   }
 
@@ -326,9 +377,7 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
   Future<void> _createMemos() async {
     final topic = _currentTopic ?? 'ce sujet';
     final explanation = _lastExplanation ?? '';
-    _addUserBubble('📝 Crée une fiche mémo');
-    setState(() => _isLoading = true);
-    try {
+    await _runAction('📝 Crée une fiche mémo', (_) async {
       final memoContent = await _aiController.generateMemo(explanation, topic);
       final memo = MemoCard(
         title: topic,
@@ -337,19 +386,16 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
         category: _guessCategory(topic),
       );
       await StorageService.instance.saveMemo(memo);
-      _addAIResponse('✅ **Fiche mémo créée et sauvegardée !**\n\nTu la retrouveras dans **Bibliothèque → Fiches mémo**.\n\n$memoContent');
-    } catch (e) {
-      _addAIResponse('😕 ${e.toString()}');
-    } finally {
-      setState(() => _isLoading = false);
-    }
+      return '✅ **Fiche mémo créée et sauvegardée !**\n\nTu la retrouveras dans **Bibliothèque → Fiches mémo**.\n\n$memoContent';
+    });
   }
 
   Future<void> _createFlashcards() async {
+    if (_isLoading) return;
     final topic = _currentTopic ?? 'ce sujet';
     final explanation = _lastExplanation ?? '';
     _addUserBubble('🗂️ Crée des flashcards');
-    setState(() => _isLoading = true);
+    _safeSetState(() => _isLoading = true);
     try {
       final cards = await _aiController.generateFlashcards(explanation, topic);
       if (!mounted) return;
@@ -359,7 +405,7 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
       ));
     } catch (e) {
       _addAIResponse('😕 ${e.toString()}');
-      setState(() => _isLoading = false);
+      _safeSetState(() => _isLoading = false);
     }
   }
 
@@ -372,13 +418,19 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
         return;
       }
     }
-    _addAIResponse('✅ **Expliquation sauvegardée** dans ta bibliothèque.\n\nTu peux la retrouver dans l\'onglet **Bibliothèque**.');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('✅ Explication sauvegardée dans ta bibliothèque.')),
+    );
   }
 
   String _guessCategory(String topic) {
     final t = topic.toLowerCase();
+    if (_currentType == 'code' || _currentType == 'error') return 'Informatique';
+    if (_currentType == 'formula') return 'Mathématiques';
     if (t.contains('git') || t.contains('code') || t.contains('flutter') || t.contains('api') ||
-        t.contains('python') || t.contains('program') || t.contains('sql')) {
+        t.contains('python') || t.contains('program') || t.contains('sql') ||
+        t.contains('informatique') || t.contains('ordinateur') || t.contains('internet')) {
       return 'Informatique';
     }
     if (t.contains('math') || t.contains('équation') || t.contains('formule')) return 'Mathématiques';
@@ -389,9 +441,8 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
   }
 
   void _goBackToTopic() {
-    if (_currentTopic != null) {
+    if (_currentTopic != null && !_isLoading) {
       _addUserBubble('← Revenir à : $_currentTopic');
-      setState(() => _isLoading = true);
       _process(_currentTopic!);
     }
   }
@@ -575,6 +626,10 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
                         _level = localLevel;
                         _complexity = localComplexity;
                       });
+                      ref.read(settingsProvider.notifier).updateAll({
+                        'selectedLevel': localLevel,
+                        'complexity': localComplexity,
+                      });
                       if (hadExplanation && (levelChanged || complexityChanged)) {
                         _reLevel();
                       }
@@ -642,6 +697,7 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
   }
 
   void _sendSuggestion(String s) {
+    if (_isLoading) return;
     _messages.add(ChatMessage(content: s, isUser: true));
     _process(s);
   }
@@ -674,7 +730,12 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
   }
 
   Future<void> _exportPdf() async {
-    if (_lastExplanation == null || _currentTopic == null) return;
+    if (_lastExplanation == null || _currentTopic == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Aucune explication à exporter pour l\'instant.')),
+      );
+      return;
+    }
     final exp = Explanation(
       query: _currentTopic!,
       response: _lastExplanation!,
@@ -682,35 +743,38 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
       complexity: _complexity,
       type: _currentType,
     );
-    final file = await PdfExportService().exportExplanation(exp);
-    if (file != null && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('📄 PDF exporté : ${file.path}')),
-      );
-    }
+    await PdfExportService().exportAndShare(context, () => PdfExportService().exportExplanation(exp));
   }
 
   Future<void> _pickImageForChat() async {
+    if (_isLoading) return;
     try {
       final picker = ImagePicker();
-      final images = await picker.pickMultiImage(imageQuality: 85);
+      final images = await picker.pickMultiImage(imageQuality: 85, maxWidth: 2048, maxHeight: 2048);
       if (images.isNotEmpty) {
         final paths = <String>[];
         for (final img in images) {
           final file = await StorageService.instance.saveImage(File(img.path));
           paths.add(file);
         }
+        final text = _controller.text.trim();
         _pendingImages = paths;
         _currentType = 'photo';
         _messages.add(ChatMessage(
-          content: '📷 ${_currentTopic ?? 'Image importée'}',
+          content: text.isEmpty ? '📷 Image importée' : text,
           isUser: true,
           imagePaths: paths,
         ));
-        setState(() {});
-        await _process(_controller.text.isEmpty ? 'Explique ce que tu vois sur cette image.' : _controller.text);
+        _safeSetState(() {});
+        await _process(text.isEmpty ? 'Explique ce que tu vois sur cette image.' : text);
       }
-    } catch (_) {}
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Impossible d\'importer l\'image')),
+        );
+      }
+    }
   }
 
   Widget _buildInputBar() {
@@ -752,17 +816,12 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
                           icon: const Icon(Icons.image_outlined),
                         ),
                 ),
-                onSubmitted: (v) => _process(v),
+                onSubmitted: (_) => _send(),
               ),
             ),
             const SizedBox(width: 8),
             GestureDetector(
-              onTap: () {
-                if (_isLoading) return;
-                final text = _controller.text.trim();
-                _messages.add(ChatMessage(content: text, isUser: true));
-                _process(text);
-              },
+              onTap: _send,
               child: Container(
                 width: 48,
                 height: 48,

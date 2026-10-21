@@ -4,6 +4,7 @@ import 'package:nabu_explain/core/constants/app_constants.dart';
 import 'package:nabu_explain/core/theme/app_theme.dart';
 import 'package:nabu_explain/providers/app_provider.dart';
 import 'package:nabu_explain/services/ai/ai_controller.dart';
+import 'package:nabu_explain/services/ai/ai_service.dart';
 import 'package:nabu_explain/services/storage/storage_service.dart';
 import 'package:nabu_explain/widgets/common/cards.dart';
 
@@ -15,11 +16,16 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  static const _customModel = '__custom__';
+
   String _provider = 'OpenAI';
-  String _model = 'gpt-4o-mini';
-  String _apiKey = '';
+  String _selectedModel = 'gpt-4o-mini';
+  final _keyController = TextEditingController();
+  final _customModelController = TextEditingController();
+  final _ollamaUrlController = TextEditingController();
   bool _obscureKey = true;
   bool _testingConnection = false;
+  bool? _testOk;
   String? _testResult;
 
   @override
@@ -28,25 +34,59 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _keyController.dispose();
+    _customModelController.dispose();
+    _ollamaUrlController.dispose();
+    super.dispose();
+  }
+
+  List<String> get _models => AppConstants.models[_provider] ?? const [];
+
+  String get _model =>
+      _selectedModel == _customModel ? _customModelController.text.trim() : _selectedModel;
+
+  void _setModel(String model) {
+    if (_models.contains(model)) {
+      _selectedModel = model;
+    } else {
+      _selectedModel = _customModel;
+      _customModelController.text = model;
+    }
+  }
+
   Future<void> _load() async {
     final settings = await StorageService.instance.loadSettings();
     final provider = settings['provider'] as String? ?? 'OpenAI';
     final model = settings['model'] as String? ?? 'gpt-4o-mini';
     final apiKey = await StorageService.instance.getApiKey(provider) ?? '';
+    if (!mounted) return;
     setState(() {
       _provider = provider;
-      _model = model;
-      _apiKey = apiKey;
+      _setModel(model);
+      _keyController.text = apiKey;
+      _ollamaUrlController.text = settings['ollamaUrl'] as String? ?? OllamaService.defaultUrl;
     });
   }
 
   Future<void> _save() async {
-    await StorageService.instance.saveApiKey(_provider, _apiKey);
-    await ref.read(settingsProvider.notifier).update('provider', _provider);
-    await ref.read(settingsProvider.notifier).update('model', _model);
-    if (mounted) {
-      Navigator.pop(context);
+    if (_model.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Indique le nom du modèle.')),
+      );
+      return;
+    }
+    await StorageService.instance.saveApiKey(_provider, _keyController.text.trim());
+    await ref.read(settingsProvider.notifier).updateAll({
+      'provider': _provider,
+      'model': _model,
+      'ollamaUrl': _ollamaUrlController.text.trim(),
+    });
+    if (mounted) {
+      final messenger = ScaffoldMessenger.of(context);
+      Navigator.pop(context);
+      messenger.showSnackBar(
         const SnackBar(content: Text('✅ Configuration IA sauvegardée')),
       );
     }
@@ -57,20 +97,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _testingConnection = true;
       _testResult = null;
     });
-    final ok = await AIController().testConnection(
+    final error = await AIController().testConnection(
       provider: _provider,
-      apiKey: _apiKey,
+      apiKey: _keyController.text.trim(),
       model: _model,
+      baseUrl: _ollamaUrlController.text.trim(),
     );
+    if (!mounted) return;
     setState(() {
       _testingConnection = false;
-      _testResult = ok ? '✅ Connexion réussie ! Le modèle répond.' : '❌ Échec de la connexion. Vérifie ta clé, ton modèle et ta connexion Internet.';
+      _testOk = error == null;
+      _testResult = error == null ? '✅ Connexion réussie ! Le modèle répond.' : '❌ Échec de la connexion.\n\n$error';
     });
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final labelStyle = TextStyle(
+      fontSize: 14,
+      fontWeight: FontWeight.w800,
+      color: isDark ? Colors.white : NabuColors.blueDeep,
+    );
 
     return Scaffold(
       appBar: AppBar(
@@ -110,9 +158,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     onTap: () {
                       setState(() {
                         _provider = p;
-                        final models = AppConstants.models[p];
-                        _model = models != null && models.isNotEmpty ? models.first : 'default';
-                        _apiKey = '';
+                        _selectedModel = _models.isNotEmpty ? _models.first : _customModel;
+                        _customModelController.clear();
+                        _keyController.clear();
+                        _testResult = null;
                       });
                       _loadKey();
                     },
@@ -122,41 +171,58 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: 24),
 
             // Model selection
-            Text(
-              'Modèle',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-                color: isDark ? Colors.white : NabuColors.blueDeep,
-              ),
-            ),
+            Text('Modèle', style: labelStyle),
             const SizedBox(height: 8),
             DropdownButtonFormField<String>(
-              initialValue: AppConstants.models[_provider]?.contains(_model) == true ? _model : (AppConstants.models[_provider]?.first ?? ''),
-              decoration: InputDecoration(
-                prefixIcon: const Icon(Icons.memory),
+              // initialValue n'est lu qu'à la création : la clé force la
+              // reconstruction quand le fournisseur ou le modèle chargé change.
+              key: ValueKey('$_provider/$_selectedModel'),
+              initialValue: _selectedModel,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.memory),
               ),
-              items: (AppConstants.models[_provider] ?? [])
-                  .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                  .toList(),
-              onChanged: (v) => setState(() => _model = v ?? _model),
+              items: [
+                for (final m in _models) DropdownMenuItem(value: m, child: Text(m)),
+                const DropdownMenuItem(value: _customModel, child: Text('Autre modèle…')),
+              ],
+              onChanged: (v) => setState(() => _selectedModel = v ?? _selectedModel),
             ),
+            if (_selectedModel == _customModel) ...[
+              const SizedBox(height: 8),
+              TextField(
+                controller: _customModelController,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  hintText: 'Nom exact du modèle (ex. gpt-4.1-nano)',
+                  prefixIcon: Icon(Icons.edit_outlined),
+                ),
+              ),
+            ],
             const SizedBox(height: 24),
 
-            // API Key
-            Text(
-              'Clé API',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w800,
-                color: isDark ? Colors.white : NabuColors.blueDeep,
+            if (_provider == 'Ollama') ...[
+              Text('Adresse du serveur Ollama', style: labelStyle),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _ollamaUrlController,
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  hintText: 'http://192.168.1.10:11434',
+                  prefixIcon: Icon(Icons.dns_outlined),
+                ),
               ),
-            ),
+              const SizedBox(height: 24),
+            ],
+
+            // API Key
+            Text(_provider == 'Ollama' ? 'Clé API (facultative)' : 'Clé API', style: labelStyle),
             const SizedBox(height: 8),
             TextField(
-              controller: TextEditingController(text: _apiKey),
+              controller: _keyController,
               obscureText: _obscureKey,
-              onChanged: (v) => setState(() => _apiKey = v),
+              autocorrect: false,
+              enableSuggestions: false,
               decoration: InputDecoration(
                 hintText: 'sk-... (ta clé est stockée de façon sécurisée)',
                 prefixIcon: const Icon(Icons.key_outlined),
@@ -177,7 +243,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 const SizedBox(width: 6),
                 const Expanded(
                   child: Text(
-                    'Ta clé est stockée dans le stockage sécurisé de ton téléphone. Elle n\'est jamais exposée dans les logs.',
+                    'Ta clé est stockée dans le stockage sécurisé de ton téléphone et n\'est envoyée qu\'au fournisseur choisi.',
                     style: TextStyle(fontSize: 11, color: Colors.grey),
                   ),
                 ),
@@ -196,7 +262,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             if (_testResult != null) ...[
               const SizedBox(height: 12),
               GlassCard(
-                tintColor: _testResult!.contains('✅') ? NabuColors.green.withValues(alpha: 0.1) : NabuColors.red.withValues(alpha: 0.1),
+                tintColor: _testOk == true ? NabuColors.green.withValues(alpha: 0.1) : NabuColors.red.withValues(alpha: 0.1),
                 child: Text(
                   _testResult!,
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
@@ -216,9 +282,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     SizedBox(height: 6),
                     Text(
                       'Ollama tourne sur ton ordinateur/machine locale.\n'
-                      '• Installe Ollama sur ta machine\n'
-                      '• Ollama se connecte via l\'IP de ton serveur.\n'
-                      '• Par défaut : http://10.0.2.2:11434 (émulateur Android)\n'
+                      '• Lance Ollama avec OLLAMA_HOST=0.0.0.0 pour qu\'il soit joignable depuis le téléphone.\n'
+                      '• Indique l\'adresse IP de ta machine sur le réseau local (ex. http://192.168.1.10:11434).\n'
+                      '• http://10.0.2.2:11434 ne fonctionne que dans l\'émulateur Android.\n'
                       '• Aucune clé API n\'est nécessaire.',
                       style: TextStyle(fontSize: 12, height: 1.5),
                     ),
@@ -240,9 +306,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _loadKey() async {
-    final key = await StorageService.instance.getApiKey(_provider);
-    if (mounted) {
-      setState(() => _apiKey = key ?? '');
+    final provider = _provider;
+    final key = await StorageService.instance.getApiKey(provider);
+    if (mounted && provider == _provider) {
+      setState(() => _keyController.text = key ?? '');
     }
   }
 

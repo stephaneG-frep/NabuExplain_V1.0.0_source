@@ -30,7 +30,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _pickImages(BuildContext context) async {
     try {
-      final images = await _imagePicker.pickMultiImage(imageQuality: 85);
+      final images = await _imagePicker.pickMultiImage(imageQuality: 85, maxWidth: 2048, maxHeight: 2048);
       if (images.isNotEmpty) {
         final paths = <String>[];
         for (final img in images) {
@@ -53,6 +53,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       final photo = await _imagePicker.pickImage(
         source: ImageSource.camera,
         imageQuality: 85,
+        maxWidth: 2048,
+        maxHeight: 2048,
       );
       if (photo != null) {
         final file = await StorageService.instance.saveImage(File(photo.path));

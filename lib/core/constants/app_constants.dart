@@ -14,11 +14,13 @@ class AppConstants {
   ];
 
   static const Map<String, List<String>> models = {
-    'OpenAI': ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'o1-preview', 'o1-mini'],
-    'Claude': ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307'],
-    'Gemini': ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash'],
-    'Mistral': ['mistral-large-latest', 'mistral-medium-latest', 'codestral-latest'],
-    'Ollama': ['llama3.1', 'mistral', 'codellama', 'phi3'],
+    // Le premier de chaque liste est le modèle par défaut. Un autre nom peut
+    // être saisi dans les paramètres (« Autre modèle »).
+    'OpenAI': ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-5', 'gpt-5-mini'],
+    'Claude': ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
+    'Gemini': ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.5-flash-lite'],
+    'Mistral': ['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest', 'pixtral-large-latest', 'codestral-latest'],
+    'Ollama': ['llama3.1', 'llama3.2-vision', 'mistral', 'qwen2.5-coder', 'llava'],
   };
 
   static const List<Map<String, String>> levels = [

@@ -39,8 +39,9 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
       final ex = await widget.aiController.generateExercise(
         widget.topic,
         _difficulty,
-        'beginner',
+        StorageService.instance.cachedSettings['selectedLevel'] as String? ?? 'beginner',
       );
+      if (!mounted) return;
       setState(() {
         _exercise = ex;
         _isLoading = false;
@@ -48,15 +49,15 @@ class _ExerciseScreenState extends State<ExerciseScreen> {
         _solutionShown = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _isLoading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('😕 $e')));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('😕 $e')));
     }
   }
 
   Future<void> _markDone() async {
-    if (_exercise == null) return;
+    // Un exercice ne compte qu'une fois dans la progression.
+    if (_exercise == null || _exercise!.completed) return;
     final updated = Exercise(
       id: _exercise!.id,
       topic: _exercise!.topic,
