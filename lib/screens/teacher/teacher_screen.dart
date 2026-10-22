@@ -62,18 +62,23 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
     final settings = ref.read(settingsProvider);
     _session = TeacherSession(
       initialType: widget.initialType,
-      initialImages: widget.initialImages,
       conversation: widget.conversation,
       level: settings['selectedLevel'] as String? ?? 'beginner',
       complexity: settings['complexity'] as int? ?? 50,
     )..addListener(_onSessionChanged);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final prompt = widget.initialPrompt?.trim();
-      if (prompt != null &&
-          prompt.isNotEmpty &&
-          !_prefills.any(prompt.startsWith)) {
-        _session.send(prompt);
+      final prompt = widget.initialPrompt?.trim() ?? '';
+      final question = prompt.isNotEmpty && !_prefills.any(prompt.startsWith)
+          ? prompt
+          : '';
+      final images = widget.initialImages ?? const <String>[];
+      // Une photo envoyée depuis l'accueil arrive souvent sans question :
+      // elle doit quand même être expliquée tout de suite.
+      if (images.isNotEmpty) {
+        _session.sendImages(images, question);
+      } else if (question.isNotEmpty) {
+        _session.send(question);
       }
     });
   }
@@ -179,11 +184,10 @@ class _TeacherScreenState extends ConsumerState<TeacherScreen> {
     final messages = _session.messages;
 
     return Scaffold(
+      // Pas de flèche retour forcée : dans l'onglet « Le Professeur », il n'y a
+      // rien derrière (pop fermait l'écran principal → écran noir). L'AppBar
+      // n'affiche la flèche que si l'écran a été ouvert par-dessus un autre.
       appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [

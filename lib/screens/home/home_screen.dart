@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -23,6 +24,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   final List<String> _pendingImages = [];
 
   @override
+  void initState() {
+    super.initState();
+    if (Platform.isAndroid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _recoverLostPhoto());
+    }
+  }
+
+  /// Android peut fermer l'appli pendant que l'appareil photo est ouvert : la
+  /// photo est alors rendue au redémarrage, il faut la récupérer ici.
+  Future<void> _recoverLostPhoto() async {
+    try {
+      final response = await _imagePicker.retrieveLostData();
+      final files = response.files;
+      if (response.isEmpty || files == null || files.isEmpty) return;
+      for (final f in files) {
+        _pendingImages.add(
+          await StorageService.instance.saveImage(File(f.path)),
+        );
+      }
+      if (mounted) _launch(context, 'photo');
+    } catch (_) {
+      // Rien à récupérer : comportement normal.
+    }
+  }
+
+  @override
   void dispose() {
     _controller.dispose();
     super.dispose();
@@ -30,7 +57,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _pickImages(BuildContext context) async {
     try {
-      final images = await _imagePicker.pickMultiImage(imageQuality: 85, maxWidth: 2048, maxHeight: 2048);
+      final images = await _imagePicker.pickMultiImage(
+        imageQuality: 85,
+        maxWidth: 2048,
+        maxHeight: 2048,
+      );
       if (images.isNotEmpty) {
         final paths = <String>[];
         for (final img in images) {
@@ -84,13 +115,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ? (text.length < 3 ? text : text)
         : text;
 
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => TeacherScreen(
-        initialPrompt: effectiveText.isEmpty ? prefills[type] ?? '' : effectiveText,
-        initialType: type,
-        initialImages: _pendingImages.isNotEmpty ? List.of(_pendingImages) : null,
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TeacherScreen(
+          initialPrompt: effectiveText.isEmpty
+              ? prefills[type] ?? ''
+              : effectiveText,
+          initialType: type,
+          initialImages: _pendingImages.isNotEmpty
+              ? List.of(_pendingImages)
+              : null,
+        ),
       ),
-    ));
+    );
 
     _pendingImages.clear();
     _controller.clear();
@@ -104,10 +141,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           '🔒 Votre contenu sera envoyé à un·e fournisseur·se IA externe. Consultez les paramètres pour le configurer.',
         ),
         duration: const Duration(seconds: 3),
-        action: SnackBarAction(
-          label: 'Compris',
-          onPressed: () {},
-        ),
+        action: SnackBarAction(label: 'Compris', onPressed: () {}),
       ),
     );
   }
@@ -144,7 +178,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                               children: [
                                 Row(
                                   children: [
-                                    const Text('🦉', style: TextStyle(fontSize: 28)),
+                                    const Text(
+                                      '🦉',
+                                      style: TextStyle(fontSize: 28),
+                                    ),
                                     const SizedBox(width: 8),
                                     Text(
                                       'NabuExplain',
@@ -152,9 +189,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                         fontSize: 26,
                                         fontWeight: FontWeight.w900,
                                         foreground: Paint()
-                                          ..shader = const LinearGradient(
-                                            colors: [NabuColors.violetElectric, NabuColors.cyanSoft],
-                                          ).createShader(const Rect.fromLTWH(0, 0, 250, 40)),
+                                          ..shader =
+                                              const LinearGradient(
+                                                colors: [
+                                                  NabuColors.violetElectric,
+                                                  NabuColors.cyanSoft,
+                                                ],
+                                              ).createShader(
+                                                const Rect.fromLTWH(
+                                                  0,
+                                                  0,
+                                                  250,
+                                                  40,
+                                                ),
+                                              ),
                                       ),
                                     ),
                                   ],
@@ -165,23 +213,35 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   style: TextStyle(
                                     fontSize: 13,
                                     fontStyle: FontStyle.italic,
-                                    color: isDark ? Colors.white60 : Colors.black54,
+                                    color: isDark
+                                        ? Colors.white60
+                                        : Colors.black54,
                                   ),
                                 ),
                               ],
                             ),
                           ),
                           IconButton(
-onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                            builder: (_) => const SettingsScreen(),
-                          )),
-                          icon: const Icon(Icons.settings, color: NabuColors.violetElectric),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                            builder: (_) => const ManualScreen(),
-                          )),
-                            icon: const Icon(Icons.help_outline, color: NabuColors.violetElectric),
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const SettingsScreen(),
+                              ),
+                            ),
+                            icon: const Icon(
+                              Icons.settings,
+                              color: NabuColors.violetElectric,
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const ManualScreen(),
+                              ),
+                            ),
+                            icon: const Icon(
+                              Icons.help_outline,
+                              color: NabuColors.violetElectric,
+                            ),
                           ),
                         ],
                       ),
@@ -227,7 +287,9 @@ onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                                     child: Stack(
                                       children: [
                                         ClipRRect(
-                                          borderRadius: BorderRadius.circular(10),
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
                                           child: Image.file(
                                             File(_pendingImages[i]),
                                             width: 60,
@@ -236,15 +298,19 @@ onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                                           ),
                                         ),
                                         GestureDetector(
-                                          onTap: () => setState(() =>
-                                              _pendingImages.removeAt(i)),
+                                          onTap: () => setState(
+                                            () => _pendingImages.removeAt(i),
+                                          ),
                                           child: Container(
                                             decoration: const BoxDecoration(
                                               color: Colors.black54,
                                               shape: BoxShape.circle,
                                             ),
-                                            child: const Icon(Icons.close,
-                                                size: 16, color: Colors.white),
+                                            child: const Icon(
+                                              Icons.close,
+                                              size: 16,
+                                              color: Colors.white,
+                                            ),
                                           ),
                                         ),
                                       ],
@@ -280,7 +346,9 @@ onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                     crossAxisCount: 2,
                     mainAxisSpacing: 12,
                     crossAxisSpacing: 12,
-                    mainAxisExtent: 32 + 80 * MediaQuery.textScalerOf(context).scale(12) / 12,
+                    mainAxisExtent:
+                        32 +
+                        80 * MediaQuery.textScalerOf(context).scale(12) / 12,
                   ),
                   delegate: SliverChildListDelegate([
                     for (final action in AppConstants.quickActions)
@@ -336,9 +404,7 @@ onPressed: () => Navigator.of(context).push(MaterialPageRoute(
         content: TextField(
           controller: controller,
           maxLines: 8,
-          decoration: const InputDecoration(
-            hintText: 'Colle ton code ici...',
-          ),
+          decoration: const InputDecoration(hintText: 'Colle ton code ici...'),
         ),
         actions: [
           TextButton(
@@ -349,12 +415,14 @@ onPressed: () => Navigator.of(context).push(MaterialPageRoute(
             onPressed: () {
               if (controller.text.trim().isNotEmpty) {
                 Navigator.pop(context);
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => TeacherScreen(
-                    initialPrompt: controller.text.trim(),
-                    initialType: 'code',
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => TeacherScreen(
+                      initialPrompt: controller.text.trim(),
+                      initialType: 'code',
+                    ),
                   ),
-                ));
+                );
               }
             },
             child: const Text('Expliquer'),
@@ -386,12 +454,14 @@ onPressed: () => Navigator.of(context).push(MaterialPageRoute(
             onPressed: () {
               if (controller.text.trim().isNotEmpty) {
                 Navigator.pop(context);
-                Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => TeacherScreen(
-                    initialPrompt: controller.text.trim(),
-                    initialType: 'error',
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => TeacherScreen(
+                      initialPrompt: controller.text.trim(),
+                      initialType: 'error',
+                    ),
                   ),
-                ));
+                );
               }
             },
             child: const Text('Expliquer'),
@@ -416,10 +486,22 @@ class _QuickActionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = [
-      [NabuColors.violetElectric.withValues(alpha: 0.15), NabuColors.blueDeep.withValues(alpha: 0.1)],
-      [NabuColors.cyanSoft.withValues(alpha: 0.15), NabuColors.turquoise.withValues(alpha: 0.1)],
-      [NabuColors.orange.withValues(alpha: 0.15), NabuColors.magenta.withValues(alpha: 0.1)],
-      [NabuColors.turquoise.withValues(alpha: 0.15), NabuColors.cyanSoft.withValues(alpha: 0.1)],
+      [
+        NabuColors.violetElectric.withValues(alpha: 0.15),
+        NabuColors.blueDeep.withValues(alpha: 0.1),
+      ],
+      [
+        NabuColors.cyanSoft.withValues(alpha: 0.15),
+        NabuColors.turquoise.withValues(alpha: 0.1),
+      ],
+      [
+        NabuColors.orange.withValues(alpha: 0.15),
+        NabuColors.magenta.withValues(alpha: 0.1),
+      ],
+      [
+        NabuColors.turquoise.withValues(alpha: 0.15),
+        NabuColors.cyanSoft.withValues(alpha: 0.1),
+      ],
     ];
     final index = label.hashCode % colors.length;
 
@@ -450,10 +532,7 @@ class _QuickActionCard extends StatelessWidget {
               label,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-              ),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
             ),
           ],
         ),

@@ -17,7 +17,13 @@ class MainScreen extends ConsumerStatefulWidget {
 class _MainScreenState extends ConsumerState<MainScreen> {
   int _index = 0;
 
-  static const _titles = ['Accueil', 'Le Professeur', 'Bibliothèque', 'Progression', 'Profil'];
+  static const _titles = [
+    'Accueil',
+    'Le Professeur',
+    'Bibliothèque',
+    'Progression',
+    'Profil',
+  ];
   static const _icons = [
     Icons.home_rounded,
     Icons.forum_rounded,
@@ -30,42 +36,50 @@ class _MainScreenState extends ConsumerState<MainScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Scaffold(
-      body: IndexedStack(
-        index: _index,
-        children: const [
-          HomeScreen(),
-          TeacherScreen(),
-          LibraryScreen(),
-          ProgressionScreen(),
-          ProfileScreen(),
-        ],
-      ),
-      bottomNavigationBar: Container(
-        decoration: BoxDecoration(
-          color: isDark ? NabuColors.surfaceDark : Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.08),
-              blurRadius: 16,
-              offset: const Offset(0, -4),
-            ),
+    // Retour système depuis un autre onglet : revenir à l'accueil plutôt que
+    // quitter l'appli.
+    return PopScope(
+      canPop: _index == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) setState(() => _index = 0);
+      },
+      child: Scaffold(
+        body: IndexedStack(
+          index: _index,
+          children: const [
+            HomeScreen(),
+            TeacherScreen(),
+            LibraryScreen(),
+            ProgressionScreen(),
+            ProfileScreen(),
           ],
         ),
-        child: SafeArea(
-          top: false,
-          child: Row(
-            children: [
-              for (int i = 0; i < _titles.length; i++)
-                Expanded(
-                  child: _NavItem(
-                    icon: _icons[i],
-                    label: _titles[i],
-                    selected: _index == i,
-                    onTap: () => setState(() => _index = i),
-                  ),
-                ),
+        bottomNavigationBar: Container(
+          decoration: BoxDecoration(
+            color: isDark ? NabuColors.surfaceDark : Colors.white,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 16,
+                offset: const Offset(0, -4),
+              ),
             ],
+          ),
+          child: SafeArea(
+            top: false,
+            child: Row(
+              children: [
+                for (int i = 0; i < _titles.length; i++)
+                  Expanded(
+                    child: _NavItem(
+                      icon: _icons[i],
+                      label: _titles[i],
+                      selected: _index == i,
+                      onTap: () => setState(() => _index = i),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -109,8 +123,8 @@ class _NavItem extends StatelessWidget {
                 color: selected
                     ? Colors.white
                     : Theme.of(context).brightness == Brightness.dark
-                        ? Colors.white38
-                        : Colors.black38,
+                    ? Colors.white38
+                    : Colors.black38,
                 size: 22,
               ),
             ),
@@ -123,8 +137,8 @@ class _NavItem extends StatelessWidget {
                 color: selected
                     ? NabuColors.violetElectric
                     : (Theme.of(context).brightness == Brightness.dark
-                        ? Colors.white38
-                        : Colors.black38),
+                          ? Colors.white38
+                          : Colors.black38),
               ),
             ),
           ],

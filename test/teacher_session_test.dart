@@ -55,6 +55,17 @@ void main() {
     expect(session.isLoading, isFalse);
   });
 
+  test('une photo sans question est quand même expliquée', () async {
+    final ai = FakeAI();
+    final session = TeacherSession(initialType: 'photo', aiController: ai);
+
+    await session.sendImages(['/tmp/photo.jpg'], '');
+
+    expect(ai.queries, ['Explique ce que tu vois sur cette image.']);
+    expect(session.messages.first.imagePaths, ['/tmp/photo.jpg']);
+    expect(session.messages.last.isUser, isFalse);
+  });
+
   test('un texte vide n\'est pas envoyé', () {
     final session = TeacherSession(initialType: 'notion', aiController: FakeAI());
     expect(session.send('   '), isFalse);
