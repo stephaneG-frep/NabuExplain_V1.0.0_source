@@ -66,9 +66,11 @@ class _DotState extends State<_Dot> with SingleTickerProviderStateMixin {
   Widget build(BuildContext context) {
     return FadeTransition(
       opacity: Tween(begin: 0.3, end: 1.0).animate(
+        // Un Interval doit rester dans [0, 1] : le 3e point (délai 400 ms)
+        // dépassait 1 et levait une erreur à chaque image.
         CurvedAnimation(parent: _controller, curve: Interval(
-          widget.delay.inMilliseconds / 600,
-          widget.delay.inMilliseconds / 600 + 0.5,
+          (widget.delay.inMilliseconds / 600).clamp(0.0, 0.5),
+          (widget.delay.inMilliseconds / 600 + 0.5).clamp(0.5, 1.0),
         )),
       ),
       child: Container(
