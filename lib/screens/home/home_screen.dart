@@ -272,19 +272,24 @@ onPressed: () => Navigator.of(context).push(MaterialPageRoute(
               // Quick actions grid
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
-                sliver: SliverGrid.count(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 1.6,
-                  children: [
+                sliver: SliverGrid(
+                  // Hauteur fixée d'après le contenu (émoji + 2 lignes) et la
+                  // taille de police du système, et non d'après la largeur :
+                  // un ratio fixe déborde sur les écrans étroits.
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    mainAxisExtent: 32 + 80 * MediaQuery.textScalerOf(context).scale(12) / 12,
+                  ),
+                  delegate: SliverChildListDelegate([
                     for (final action in AppConstants.quickActions)
                       _QuickActionCard(
                         icon: action['icon']!,
                         label: action['label']!,
                         onTap: () => _handleQuickAction(action['type']!),
                       ),
-                  ],
+                  ]),
                 ),
               ),
               const SliverToBoxAdapter(child: SizedBox(height: 24)),
