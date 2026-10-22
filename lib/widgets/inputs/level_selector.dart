@@ -28,7 +28,9 @@ class _LevelSelectorState extends State<LevelSelector> {
         ),
         const SizedBox(height: 12),
         SizedBox(
-          height: 116,
+          // Marges et bordure fixes + contenu (émoji, titre, 2 lignes de
+          // description) qui suit la taille de police du système.
+          height: 40 + 92 * MediaQuery.textScalerOf(context).scale(14) / 14,
           child: ListView.builder(
             scrollDirection: Axis.horizontal,
             itemCount: AppConstants.levels.length,
